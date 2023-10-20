@@ -3,7 +3,8 @@ package json
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.node.JsonNodeType
 import json.JsonAdapter.Companion.err
-import json.JsonAdapter.Companion.mapIfNotNull
+import json.JsonAdapterStaticConfig.defaultDateFormatter
+import json.JsonAdapterStaticConfig.defaultDateTimeFormatter
 import java.math.BigDecimal
 import java.math.BigInteger
 import java.time.LocalDate
@@ -19,15 +20,10 @@ class RootIsNull(targetFieldName: String) :
 class JsonLazyParseException(msg: String, e: Exception) : RuntimeException(msg, e)
 
 /**
- *  rootNode: JsonNode - Корневой узел в котором нужно искать поле.
- *  targetFieldName: JsonNode - имя поля которое ищем.
+ *  rootNode: JsonNode - Корневой узел в котором ищем узел/поле.
+ *  targetFieldName: String - имя узла/поля. которое ищем.
  */
-fun interface JsonAdapterFieldExtractor : (JsonNode?, String) -> JsonNode?
-
-val defaultExtractor = JsonAdapterFieldExtractor { rootNode, targetFieldName ->
-    if (rootNode == null) throw RootIsNull(targetFieldName)
-    else rootNode.get(targetFieldName)
-}
+fun interface JsonNodeExtractor : (JsonNode?, String) -> JsonNode?
 
 /**
  * node : JsonNode - Конвертируемый узел.
@@ -35,6 +31,21 @@ val defaultExtractor = JsonAdapterFieldExtractor { rootNode, targetFieldName ->
  */
 fun interface JsonNodeMapper<E> : (JsonNode?) -> E
 
+/**
+ * Статический объект Конфиг.
+ * Задавая значения конфига, можно менять поведение методов фреймворка.
+ */
+object JsonAdapterStaticConfig {
+    /** Стандартный Способ искать Вложенные узлы/объекты. */
+    var defaultNodeExtractor = JsonNodeExtractor { rootNode, targetFieldName ->
+        if (rootNode == null) throw RootIsNull(targetFieldName)
+        else rootNode.get(targetFieldName)
+    }
+
+    var defaultDateTimeFormatter: DateTimeFormatter = DateTimeFormatter.ISO_DATE_TIME
+    var defaultDateFormatter: DateTimeFormatter = DateTimeFormatter.ISO_DATE
+
+}
 
 interface JsonAdapter {
     val json: JsonNode
@@ -81,20 +92,20 @@ interface JsonAdapter {
      */
 
     /** Если Узел не найден или коллекция пуста -> return emptyList<K,V>() */
-    infix fun <E> list(elemMapper: (JsonNode) -> E): JsonNodeMapper<List<E>> =
+    fun <E> list(elemMapper: JsonNodeMapper<E>): JsonNodeMapper<List<E>> =
         JsonNodeMapper { node ->
-            node.mapIfNotNull { elements()!!.asSequence().map(elemMapper).toList() } ?: emptyList()
+            node.mapIfNotNull { elements().asSequence().map(elemMapper).toList() } ?: emptyList()
         }
 
     /** Если Узел не найден или коллекция пуста -> return emptySet<K,V>() */
-    infix fun <E> set(elemMapper: (JsonNode) -> E): JsonNodeMapper<Set<E>> =
-        JsonNodeMapper { node -> node.mapIfNotNull { elements()!!.asSequence().map(elemMapper).toSet() } ?: emptySet() }
+    fun <E> set(elemMapper: JsonNodeMapper<E>): JsonNodeMapper<Set<E>> =
+        JsonNodeMapper { node -> node.mapIfNotNull { elements().asSequence().map(elemMapper).toSet() } ?: emptySet() }
 
     /** Если Узел не найден или коллекция пуста -> return emptyMap<K,V>() */
-    infix fun <K, V> map(keyValueMapper: (String, JsonNode) -> Pair<K, V>): JsonNodeMapper<Map<K, V>> =
+    fun <K, V> map(pairMapper: (String, JsonNode?) -> Pair<K, V>): JsonNodeMapper<Map<K, V>> =
         JsonNodeMapper { node ->
             node.mapIfNotNull {
-                fields().asSequence().associate { (key, value) -> keyValueMapper.invoke(key, value) }
+                fields().asSequence().associate { (key, value) -> pairMapper.invoke(key, value) }
             } ?: emptyMap()
         }
 
@@ -102,12 +113,16 @@ interface JsonAdapter {
      * Key - Имя поля внутри json object
      * Val - С конвертированное значения поля внутри json object
      * */
-    infix fun <V> map(valueMapper: (JsonNode) -> V): JsonNodeMapper<Map<String, V>> =
+    fun <V> map(valueMapper: JsonNodeMapper<V>): JsonNodeMapper<Map<String, V>> =
         JsonNodeMapper { node ->
             node.mapIfNotNull {
                 fields().asSequence().associate { (key, value) -> key to valueMapper.invoke(value) }
             } ?: emptyMap()
         }
+
+    /** Если Узел не найден или коллекция пуста -> return emptyMap<K,V>() */
+    fun <K, V> map(mapEntryMapper: (Map.Entry<String, JsonNode?>) -> Pair<K, V>): JsonNodeMapper<Map<K, V>> =
+        JsonNodeMapper { node -> node.mapIfNotNull { fields().asSequence().associate(mapEntryMapper) } ?: emptyMap() }
 
     /** Если Узел не найден или коллекция пуста -> return emptyMap<K,V>()
      * Key - Имя поля внутри json object
@@ -124,7 +139,7 @@ interface JsonAdapter {
 
 
     /** Если Узел не найден или коллекция пуста -> return mutableListOf<E>() */
-    infix fun <E> mutableList(elemMapper: (JsonNode) -> E): JsonNodeMapper<MutableList<E>> =
+    fun <E> mutableList(elemMapper: JsonNodeMapper<E>): JsonNodeMapper<MutableList<E>> =
         JsonNodeMapper { node ->
             node.mapIfNotNull {
                 elements().asSequence().map(elemMapper).toMutableList()
@@ -132,34 +147,39 @@ interface JsonAdapter {
         }
 
     /** Если Узел не найден или коллекция пуста -> return mutableSetOf<E>() */
-    infix fun <E> mutableSet(elemMapper: (JsonNode) -> E): JsonNodeMapper<Set<E>> =
+    fun <E> mutableSet(elemMapper: JsonNodeMapper<E>): JsonNodeMapper<Set<E>> =
         JsonNodeMapper { node ->
             node.mapIfNotNull {
-                elements()!!.asSequence().map(elemMapper).toMutableSet()
+                elements().asSequence().map(elemMapper).toMutableSet()
             } ?: mutableSetOf()
         }
 
     /** Если Узел не найден или коллекция пуста -> return mutableMapOf<K,V>() */
-    infix fun <K, V> mutableMap(elemMapper: (String, JsonNode) -> Pair<K, V>): JsonNodeMapper<MutableMap<K, V>> =
+    fun <K, V> mutableMap(elemMapper: (String, JsonNode?) -> Pair<K, V>): JsonNodeMapper<MutableMap<K, V>> =
         JsonNodeMapper { node ->
             node.mapIfNotNull {
                 fields().asSequence().map { (key, value) -> elemMapper.invoke(key, value) }.toMap(LinkedHashMap())
             } ?: mutableMapOf()
         }
 
-    /** Если Узел не найден или коллекция пуста -> return emptyMap<K,V>()
+    /** Если Узел не найден или коллекция пуста -> return mutableMapOf<K,V>()
      * Key - Имя поля внутри json object
      * Val - С конвертированное значения поля внутри json object
      * */
-    infix fun <V> mutableMap(valueMapper: (JsonNode) -> V): JsonNodeMapper<MutableMap<String, V>> =
+    fun <V> mutableMap(valueMapper: JsonNodeMapper<V>): JsonNodeMapper<MutableMap<String, V>> =
         JsonNodeMapper { node ->
             node.mapIfNotNull {
-                fields().asSequence().map { (key, value) -> key to valueMapper.invoke(value) }
-                    .toMap(LinkedHashMap())
+                fields().asSequence().map { (key, value) -> key to valueMapper.invoke(value) }.toMap(LinkedHashMap())
             } ?: mutableMapOf()
         }
 
-    /** Если Узел не найден или коллекция пуста -> return emptyMap<K,V>()
+    /** Если Узел не найден или коллекция пуста -> return mutableMapOf<K,V>() */
+    fun <K, V> mutableMap(mapEntryMapper: (Map.Entry<String, JsonNode?>) -> Pair<K, V>): JsonNodeMapper<MutableMap<K, V>> =
+        JsonNodeMapper { node ->
+            node.mapIfNotNull { fields().asSequence().map(mapEntryMapper).toMap(LinkedHashMap()) } ?: mutableMapOf()
+        }
+
+    /** Если Узел не найден или коллекция пуста -> return mutableMapOf<String,String>()
      * Key - Имя поля внутри json object
      * Val - С конвертированное в String значения поля внутри json object
      * ВАЖНО! null и другие примитивы не считая String, будут выглядит так: "null", "123", "true" и т.д.
@@ -173,16 +193,17 @@ interface JsonAdapter {
      */
 
 
-    infix fun <E> obj(objectMapper: (JsonNode) -> E): JsonNodeMapper<E> =
-        JsonNodeMapper { node -> node.mapIfNotNull(objectMapper) ?: err() }
+    fun <E> obj(toObjectMapper: (JsonNode) -> E): JsonNodeMapper<E> =
+        JsonNodeMapper { node -> node.mapIfNotNull(toObjectMapper) ?: err() }
 
-    infix fun <E> objNull(objectMapper: (JsonNode) -> E): JsonNodeMapper<E?> =
-        JsonNodeMapper { node -> node.mapIfNotNull(objectMapper) }
+    fun <E> objNull(toObjectMapper: (JsonNode) -> E): JsonNodeMapper<E?> =
+        JsonNodeMapper { node -> node.mapIfNotNull(toObjectMapper) }
+
+    fun <E> objOrCompute(toObjectMapper: (JsonNode) -> E, ifNodeNullThenComputeValue: () -> E): JsonNodeMapper<E> =
+        JsonNodeMapper { node -> node.mapIfNotNull(toObjectMapper) ?: ifNodeNullThenComputeValue() }
 
 
     companion object {
-        private val dateTimeMapper = DateTimeFormatter.ISO_DATE_TIME
-        private val dateMapper = DateTimeFormatter.ISO_DATE
         fun err(): Nothing = throw RuntimeException("Required not null value")
         val intMapper = JsonNodeMapper { node -> node.mapIfNotNull { asInt() } ?: err() }
         val longMapper = JsonNodeMapper { node -> node.mapIfNotNull { asLong() } ?: err() }
@@ -199,15 +220,21 @@ interface JsonAdapter {
         val bigDecimalMapper = JsonNodeMapper { node -> node.mapIfNotNull { asText().let(::BigDecimal) } ?: err() }
         val bigDecimalNullMapper = JsonNodeMapper { node -> node.mapIfNotNull { asText().let(::BigDecimal) } }
         val localDateMapper =
-            JsonNodeMapper { node -> node.mapIfNotNull { asText().let { LocalDate.parse(it, dateMapper) } } ?: err() }
+            JsonNodeMapper { node ->
+                node.mapIfNotNull { asText().let { LocalDate.parse(it, defaultDateFormatter) } } ?: err()
+            }
         val localDateNullMapper =
-            JsonNodeMapper { node -> node.mapIfNotNull { asText().let { LocalDate.parse(it, dateMapper) } } }
+            JsonNodeMapper { node ->
+                node.mapIfNotNull { asText().let { LocalDate.parse(it, defaultDateFormatter) } }
+            }
         val offsetDateTimeMapper =
             JsonNodeMapper { node ->
-                node.mapIfNotNull { asText().let { OffsetDateTime.parse(it, dateTimeMapper) } } ?: err()
+                node.mapIfNotNull { asText().let { OffsetDateTime.parse(it, defaultDateTimeFormatter) } } ?: err()
             }
         val offsetDateTimeNullMapper =
-            JsonNodeMapper { node -> node.mapIfNotNull { asText().let { OffsetDateTime.parse(it, dateTimeMapper) } } }
+            JsonNodeMapper { node ->
+                node.mapIfNotNull { asText().let { OffsetDateTime.parse(it, defaultDateTimeFormatter) } }
+            }
 
         val mapStringMapper = JsonNodeMapper { node ->
             node.mapIfNotNull {
@@ -216,22 +243,9 @@ interface JsonAdapter {
         }
         val mutableMapStringMapper = JsonNodeMapper { node ->
             node.mapIfNotNull {
-                this.fields()!!.asSequence().map { (key, value) -> key to value.asText() }.toMap(LinkedHashMap())
+                this.fields().asSequence().map { (key, value) -> key to value.asText() }.toMap(LinkedHashMap())
             } ?: mutableMapOf()
         }
-
-        /**
-         * [JsonNode.get] эта штука может вернуть под видом null:
-         * - null
-         * - [com.fasterxml.jackson.databind.node.NullNode]
-         * - [com.fasterxml.jackson.databind.node.MissingNode]
-         * Поэтому обычной проверки на null в виде `node?.let{}` может быть недостаточно в Некоторых ситуациях.
-         */
-        inline fun <E> JsonNode?.mapIfNotNull(mapper: JsonNode.() -> E): E? =
-            if (this == null ||
-                this.nodeType == JsonNodeType.NULL ||
-                this.nodeType == JsonNodeType.MISSING
-            ) null else this.mapper()
 
     }
 
@@ -253,10 +267,26 @@ inline fun <reified E : Enum<E>> JsonAdapter.enumStringNull(): JsonNodeMapper<E?
 }
 
 
+/**
+ * Делегат который ЛЕНИВО инициализирует значения путём поиска Вложенного узла в корневом узле[invokedJsonNode].
+ *
+ * Поиск по условию: jsonName == [fieldName]
+ *
+ * По умолчанию [fieldName] == [PROPERTY_NAME_IS_JSON_NAME]  - это значит что [fieldName] = ${property.name}
+ * Пример:
+ * ```
+ *      // Поиск будет по: jsonName == "version"
+ *      val version by json parse int
+ *      // Поиск будет по: jsonName == "v_id"
+ *      val version by json parse int from "v_id"
+ * ```
+ *
+ * Идейный наследник `lazy {}` [kotlin.Lazy]
+ */
 class JsonDelegate<T>(
     private val invokedJsonNode: JsonNode,
     var fieldName: String,
-    private val fieldExtractor: JsonAdapterFieldExtractor,
+    private val fieldExtractor: JsonNodeExtractor,
     private val valueMapper: JsonNodeMapper<T>
 ) : ReadOnlyProperty<JsonAdapter, T> {
     private var _value: Any? = UNINITIALIZED_VALUE
@@ -264,7 +294,7 @@ class JsonDelegate<T>(
     @Suppress("UNCHECKED_CAST")
     override operator fun getValue(thisRef: JsonAdapter, property: KProperty<*>): T {
         if (_value !== UNINITIALIZED_VALUE) return _value as T
-        if (fieldName == PROPERTY_NAME) fieldName = property.name
+        if (fieldName == PROPERTY_NAME_IS_JSON_NAME) fieldName = property.name
 
         try {
             val field = fieldExtractor.invoke(invokedJsonNode, fieldName)
@@ -282,10 +312,23 @@ class JsonDelegate<T>(
     private object UNINITIALIZED_VALUE
 }
 
-infix fun <T> JsonDelegate<T>.from(newFieldName: String): JsonDelegate<T> =
-    this.apply { fieldName = newFieldName }
-
 infix fun <T> JsonNode.parse(mapper: JsonNodeMapper<T>): JsonDelegate<T> =
-    JsonDelegate(this, PROPERTY_NAME, defaultExtractor, mapper)
+    JsonDelegate(this, PROPERTY_NAME_IS_JSON_NAME, JsonAdapterStaticConfig.defaultNodeExtractor, mapper)
 
-const val PROPERTY_NAME = "PROPERTY_NAME"
+infix fun <T> JsonDelegate<T>.from(fieldJsonName: String): JsonDelegate<T> =
+    this.apply { fieldName = fieldJsonName }
+
+const val PROPERTY_NAME_IS_JSON_NAME = "PROPERTY_NAME"
+
+/**
+ * [JsonNode.get] эта штука может вернуть под видом null:
+ * - null
+ * - [com.fasterxml.jackson.databind.node.NullNode]
+ * - [com.fasterxml.jackson.databind.node.MissingNode]
+ * Поэтому обычной проверки на null в виде `node?.let{}` может быть недостаточно в Некоторых ситуациях.
+ */
+inline fun <E> JsonNode?.mapIfNotNull(mapper: JsonNode.() -> E): E? =
+    if (this == null ||
+        this.nodeType == JsonNodeType.NULL ||
+        this.nodeType == JsonNodeType.MISSING
+    ) null else this.mapper()

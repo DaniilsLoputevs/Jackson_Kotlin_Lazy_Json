@@ -1,6 +1,7 @@
 package json
 
 import com.fasterxml.jackson.annotation.JsonInclude
+import com.fasterxml.jackson.databind.node.MissingNode
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.kotest.assertions.throwables.shouldThrow
@@ -38,7 +39,6 @@ import java.util.*
  * Any - логика вложенных сущностей
  * TODO - parse collection from null element [1,2, null, 4, bull, 5]
  * TODO - ? make as Abstract class
- * TODO - ?: objIfNullOrDo
  */
 class JsonAdapterTest : FunSpec({
     val testUuid = UUID.fromString("51381d46-056d-4091-ae43-0fcf553c7387")
@@ -107,7 +107,7 @@ class JsonAdapterTest : FunSpec({
     test("complex happy pass! @_@") {
         UserJsonAdapter(root).apply {
             shouldThrow<JsonLazyParseException> {
-                this.nonExistinngInJsonButRequiredField // getter invoke
+                this.notExistInJsonButRequiredField // getter invoke
             }
 
             version shouldBe 1
@@ -168,6 +168,7 @@ class JsonAdapterTest : FunSpec({
             }
 
             innerNullField shouldBe null
+            innerComputeField shouldBe MissingNode.getInstance()
         }
 
     }

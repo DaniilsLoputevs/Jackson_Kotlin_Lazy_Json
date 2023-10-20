@@ -1,8 +1,10 @@
 package json
 
 import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.node.MissingNode
 
 /**
+ * Поддержка типов:
  * Int
  * Double
  * Boolean
@@ -20,14 +22,9 @@ import com.fasterxml.jackson.databind.JsonNode
  * MutableSet<Any> - логика вложенных сущностей
  * MutableMap<Any, Any> - логика вложенных сущностей
  *
- *
  * Enum - (передаём enum туда, для поиска из имеющихся значений)
  * Any - логика вложенных сущностей
  */
-fun main() {
-    println("aaa")
-}
-
 class UserJsonAdapter(override val json: JsonNode) : JsonAdapter {
     val version by json parse int from "v_id"
     val intField by json parse int
@@ -52,24 +49,27 @@ class UserJsonAdapter(override val json: JsonNode) : JsonAdapter {
     val mapField by json parse map(int)
     val mapStringsField by json parse mapStrings
 
+    // Можно передавать ссылку на функцию, что принимает Map.Entry<String, JsonNode?> - поддержка разного API
+    val mapEntriesField by json parse map { (fieldName, node) -> fieldName to (node?.asText() ?: "null") }
+
 
     val mutableListField by json parse mutableList(text)
     val mutableSetField by json parse mutableSet(text)
-    val mutableMapField by json parse mutableMap { k, v ->
-        "key_prefix__$k" to v.asText().all { char -> char.isDigit() }
+
+    // Можно передавать ссылку на функцию ИЛИ Лямбду, что имеет 2 параметра: String, JsonNode? - поддержка разного API
+    val mutableMapField by json parse mutableMap { fieldName, node ->
+        "key_prefix__$fieldName" to node?.asText()?.all { char -> char.isDigit() }
     }
 
-    val balances by json parse list { BalanceJsonAdapter(it) } from "balance_list"
+    val balances by json parse list(obj(::BalanceJsonAdapter)) from "balance_list"
     val pledges by json parse set(obj(::JsonAdapterUserPledges)) from "pledge_set"
 
 
     val innerField by json parse obj(::InnerJsonAdapter)
     val innerNullField by json parse objNull(::InnerJsonAdapter)
-//        ?:
-//    JsonDelegate(MissingNode.getInstance(), PROPERTY_NAME, defaultExtractor, { })
-//    lazy { InnerJsonAdapter(MissingNode.getInstance()) }
+    val innerComputeField by json parse objOrCompute(::InnerJsonAdapter) { InnerJsonAdapter(MissingNode.getInstance()) }
 
-    val nonExistinngInJsonButRequiredField by json parse int from "undef_json"
+    val notExistInJsonButRequiredField by json parse int from "not_exist_json"
 }
 
 enum class PledgesStatus {
