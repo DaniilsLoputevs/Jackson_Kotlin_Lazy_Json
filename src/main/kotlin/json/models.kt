@@ -50,8 +50,7 @@ class UserJsonAdapter(override val json: JsonNode) : JsonAdapter {
     val mapStringsField by json parse mapStrings
 
     // Можно передавать ссылку на функцию, что принимает Map.Entry<String, JsonNode?> - поддержка разного API
-    val mapEntriesField by json parse map { (fieldName, node) -> fieldName to (node?.asText() ?: "null") }
-
+    val mapEntriesField by json parse map { fieldName, node -> fieldName to (node?.asText() ?: "null") }
 
     val mutableListField by json parse mutableList(text)
     val mutableSetField by json parse mutableSet(text)
